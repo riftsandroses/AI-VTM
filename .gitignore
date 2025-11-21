@@ -1,0 +1,59 @@
+# OS files
+.DS_Store
+
+# Ignore all .env files except example
+**/.env
+**/.env.*
+!.env.example
+!Django-backend/.env.example
+
+# Python cache
+__pycache__/
+django-backend/**/__pycache__/
+
+# Python bytecode
+*.py[cod]
+
+# Virtual environments
+venv/
+.env/
+.venv/
+
+# Node / frontend
+node_modules/
+.next/
+dist/
+build/
+
+# Logs
+*.log
+
+# Ignore Django migrations across django-backend
+django-backend/**/migrations/
+# BUT keep __init__.py inside migrations so Django doesn't break
+!django-backend/**/migrations/__init__.py
+
+# Django backend model folders to ignore
+django-backend/guardrails_models/
+django-backend/kamui_models/
+django-backend/katana_models/
+django-backend/models/
+
+# Additional folders to exclude
+django-backend/vector_db/
+django-backend/celerybeat-schedule
+django-backend/celerybeat-schedule-shm
+django-backend/celerybeat-schedule-wal
+
+# Media/static (optional)
+# media/
+# staticfiles/
+
+# IDE / Editor configs
+.vscode/
+.idea/
+
+# Pytest / Coverage
+htmlcov/
+.coverage
+.pytest_cache/

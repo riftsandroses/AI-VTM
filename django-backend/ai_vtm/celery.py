@@ -24,7 +24,12 @@ app.conf.beat_schedule = {
         'task': 'vulnerabilities.tasks.update_vector_db_from_helpful_remediations',
         'schedule': crontab(hour=3, minute=0),  # Run daily at 3 AM
     },
+    'periodic-risk-recalculation': {
+        'task': 'your_app.tasks.periodic_risk_recalculation',
+        'schedule': crontab(hour=2, minute=0, day_of_week='sunday'),  # Weekly on Sunday at 2 AM
+    },
 }
+
 
 # Celery configuration
 app.conf.update(

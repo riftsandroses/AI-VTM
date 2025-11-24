@@ -6,7 +6,14 @@ from .views import (
     VulnerabilityViewSet,
     TesterArtifactViewSet,
     AIRemediationViewSet,
-    RemediationFeedbackViewSet
+    RemediationFeedbackViewSet,
+    RemediationChatViewSet,
+    RemediationUpdateViewSet,
+    VulnerabilityRiskAssessmentViewSet,
+    AssetRiskAssessmentViewSet,
+    OrganizationRiskAssessmentViewSet,
+    RiskAssessmentHistoryViewSet,
+    BulkRiskCalculationViewSet
 )
 
 router = DefaultRouter()
@@ -16,6 +23,13 @@ router.register(r'vulnerabilities', VulnerabilityViewSet, basename='vulnerabilit
 router.register(r'artifacts', TesterArtifactViewSet, basename='artifact')
 router.register(r'remediations', AIRemediationViewSet, basename='remediation')
 router.register(r'feedback', RemediationFeedbackViewSet, basename='feedback')
+router.register(r'chat', RemediationChatViewSet, basename='chat')
+router.register(r'remediation-updates', RemediationUpdateViewSet, basename='remediation-update')
+router.register(r'vulnerability-risks', VulnerabilityRiskAssessmentViewSet, basename='vulnerability-risk')
+router.register(r'asset-risks', AssetRiskAssessmentViewSet, basename='asset-risk')
+router.register(r'organization-risks', OrganizationRiskAssessmentViewSet, basename='organization-risk')
+router.register(r'risk-history', RiskAssessmentHistoryViewSet, basename='risk-history')
+router.register(r'bulk-risk', BulkRiskCalculationViewSet, basename='bulk-risk')
 
 urlpatterns = [
     path('', include(router.urls)),

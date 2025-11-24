@@ -141,3 +141,321 @@ class RemediationFeedback(models.Model):
 
     def __str__(self):
         return f"Feedback for {self.remediation.id} - {'Helpful' if self.was_helpful else 'Not Helpful'}"
+    
+
+class RemediationChat(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    remediation = models.ForeignKey(AIRemediation, on_delete=models.CASCADE, related_name='chat_sessions')
+    session_id = models.UUIDField(default=uuid.uuid4, editable=False)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Chat for {self.remediation.vulnerability.control_title}"
+
+
+class ChatMessage(models.Model):
+    ROLE_CHOICES = [
+        ('user', 'User'),
+        ('assistant', 'Assistant'),
+        ('system', 'System'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    chat_session = models.ForeignKey(RemediationChat, on_delete=models.CASCADE, related_name='messages')
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['created_at']
+
+    def __str__(self):
+        return f"{self.role}: {self.content[:50]}..."
+
+
+class RemediationUpdate(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    remediation = models.ForeignKey(AIRemediation, on_delete=models.CASCADE, related_name='updates')
+    chat_session = models.ForeignKey(RemediationChat, on_delete=models.SET_NULL, null=True, blank=True)
+    previous_steps = models.TextField()
+    updated_steps = models.TextField()
+    update_reason = models.TextField(help_text="Why was this update made")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"Update for {self.remediation.id} at {self.created_at}"
+    
+
+class VulnerabilityRiskAssessment(models.Model):
+    """Risk assessment for individual vulnerabilities"""
+    RISK_LEVEL_CHOICES = [
+        ('critical', 'Critical'),
+        ('high', 'High'),
+        ('medium', 'Medium'),
+        ('low', 'Low'),
+        ('informational', 'Informational'),
+    ]
+    
+    PRIORITY_CHOICES = [
+        ('p1_immediate', 'P1 - Immediate (Fix within 24h)'),
+        ('p2_urgent', 'P2 - Urgent (Fix within 7 days)'),
+        ('p3_high', 'P3 - High (Fix within 30 days)'),
+        ('p4_medium', 'P4 - Medium (Fix within 90 days)'),
+        ('p5_low', 'P5 - Low (Fix when possible)'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    vulnerability = models.OneToOneField(
+        'Vulnerability', 
+        on_delete=models.CASCADE, 
+        related_name='risk_assessment'
+    )
+    
+    # Risk metrics
+    risk_score = models.IntegerField(
+        help_text="AI-calculated risk score (0-100)"
+    )
+    risk_level = models.CharField(
+        max_length=20, 
+        choices=RISK_LEVEL_CHOICES
+    )
+    priority = models.CharField(
+        max_length=20, 
+        choices=PRIORITY_CHOICES
+    )
+    
+    # AI reasoning
+    reasoning = models.TextField(
+        help_text="AI-generated explanation for the risk score"
+    )
+    key_risk_factors = models.JSONField(
+        default=list,
+        help_text="List of key factors contributing to risk"
+    )
+    recommended_timeline = models.CharField(
+        max_length=100,
+        help_text="AI-recommended remediation timeline"
+    )
+    
+    # Metadata
+    model_used = models.CharField(max_length=50, default='gpt-4o-mini')
+    calculated_at = models.DateTimeField(auto_now_add=True)
+    last_updated = models.DateTimeField(auto_now=True)
+    
+    # Manual override capability
+    is_overridden = models.BooleanField(default=False)
+    override_reason = models.TextField(blank=True)
+    overridden_by = models.CharField(max_length=255, blank=True)
+    overridden_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-risk_score', '-calculated_at']
+        verbose_name = "Vulnerability Risk Assessment"
+        verbose_name_plural = "Vulnerability Risk Assessments"
+
+    def __str__(self):
+        return f"Risk: {self.risk_score} - {self.vulnerability.control_title}"
+
+
+class AssetRiskAssessment(models.Model):
+    """Aggregated risk assessment for assets"""
+    RISK_LEVEL_CHOICES = [
+        ('critical', 'Critical'),
+        ('high', 'High'),
+        ('medium', 'Medium'),
+        ('low', 'Low'),
+        ('none', 'None'),
+    ]
+    
+    PRIORITY_CHOICES = [
+        ('p1_immediate', 'P1 - Immediate'),
+        ('p2_urgent', 'P2 - Urgent'),
+        ('p3_high', 'P3 - High'),
+        ('p4_medium', 'P4 - Medium'),
+        ('p5_low', 'P5 - Low'),
+        ('none', 'None'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    asset = models.OneToOneField(
+        'Asset', 
+        on_delete=models.CASCADE, 
+        related_name='risk_assessment'
+    )
+    
+    # Risk metrics
+    risk_score = models.IntegerField(
+        help_text="AI-calculated asset risk score (0-100)"
+    )
+    risk_level = models.CharField(
+        max_length=20, 
+        choices=RISK_LEVEL_CHOICES
+    )
+    priority = models.CharField(
+        max_length=20, 
+        choices=PRIORITY_CHOICES
+    )
+    
+    # AI reasoning
+    reasoning = models.TextField(
+        help_text="AI-generated explanation for the asset risk"
+    )
+    key_risk_factors = models.JSONField(
+        default=list,
+        help_text="List of key risk factors for this asset"
+    )
+    remediation_priority = models.JSONField(
+        default=list,
+        help_text="AI-recommended priority order for fixing vulnerabilities"
+    )
+    estimated_remediation_effort = models.TextField(
+        blank=True,
+        help_text="Estimated effort to secure this asset"
+    )
+    
+    # Vulnerability summary
+    vulnerability_summary = models.JSONField(
+        default=dict,
+        help_text="Summary of vulnerabilities by severity"
+    )
+    
+    # Metadata
+    model_used = models.CharField(max_length=50, default='gpt-4o-mini')
+    calculated_at = models.DateTimeField(auto_now_add=True)
+    last_updated = models.DateTimeField(auto_now=True)
+    
+    # Manual override
+    is_overridden = models.BooleanField(default=False)
+    override_reason = models.TextField(blank=True)
+    overridden_by = models.CharField(max_length=255, blank=True)
+    overridden_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-risk_score', '-calculated_at']
+        verbose_name = "Asset Risk Assessment"
+        verbose_name_plural = "Asset Risk Assessments"
+
+    def __str__(self):
+        return f"Risk: {self.risk_score} - {self.asset.name}"
+
+
+class OrganizationRiskAssessment(models.Model):
+    """Organization-wide risk assessment"""
+    RISK_LEVEL_CHOICES = [
+        ('critical', 'Critical'),
+        ('high', 'High'),
+        ('medium', 'Medium'),
+        ('low', 'Low'),
+        ('none', 'None'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.OneToOneField(
+        'Organization', 
+        on_delete=models.CASCADE, 
+        related_name='risk_assessment'
+    )
+    
+    # Risk metrics
+    risk_score = models.IntegerField(
+        help_text="AI-calculated organization risk score (0-100)"
+    )
+    risk_level = models.CharField(
+        max_length=20, 
+        choices=RISK_LEVEL_CHOICES
+    )
+    priority = models.CharField(
+        max_length=100,
+        help_text="Strategic priority assessment"
+    )
+    
+    # AI reasoning
+    reasoning = models.TextField(
+        help_text="AI-generated explanation for organization risk"
+    )
+    key_risk_factors = models.JSONField(
+        default=list,
+        help_text="List of organizational risk factors"
+    )
+    strategic_recommendations = models.JSONField(
+        default=list,
+        help_text="High-level strategic recommendations"
+    )
+    focus_areas = models.JSONField(
+        default=list,
+        help_text="Areas requiring immediate organizational focus"
+    )
+    
+    # Summary statistics
+    asset_summary = models.JSONField(
+        default=dict,
+        help_text="Summary of assets and vulnerabilities"
+    )
+    
+    # Metadata
+    model_used = models.CharField(max_length=50, default='gpt-4o-mini')
+    calculated_at = models.DateTimeField(auto_now_add=True)
+    last_updated = models.DateTimeField(auto_now=True)
+    
+    # Manual override
+    is_overridden = models.BooleanField(default=False)
+    override_reason = models.TextField(blank=True)
+    overridden_by = models.CharField(max_length=255, blank=True)
+    overridden_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ['-risk_score', '-calculated_at']
+        verbose_name = "Organization Risk Assessment"
+        verbose_name_plural = "Organization Risk Assessments"
+
+    def __str__(self):
+        return f"Risk: {self.risk_score} - {self.organization.name}"
+
+
+class RiskAssessmentHistory(models.Model):
+    """Track historical changes in risk assessments"""
+    ASSESSMENT_TYPE_CHOICES = [
+        ('vulnerability', 'Vulnerability'),
+        ('asset', 'Asset'),
+        ('organization', 'Organization'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    assessment_type = models.CharField(max_length=20, choices=ASSESSMENT_TYPE_CHOICES)
+    
+    # Generic foreign keys (store the ID as UUID)
+    object_id = models.UUIDField()
+    object_name = models.CharField(max_length=500, help_text="Name of the assessed object")
+    
+    # Historical data
+    previous_risk_score = models.IntegerField(null=True, blank=True)
+    new_risk_score = models.IntegerField()
+    previous_risk_level = models.CharField(max_length=20, blank=True)
+    new_risk_level = models.CharField(max_length=20)
+    
+    change_reason = models.TextField(
+        blank=True,
+        help_text="Why did the risk score change?"
+    )
+    
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Risk Assessment History"
+        verbose_name_plural = "Risk Assessment History"
+        indexes = [
+            models.Index(fields=['assessment_type', 'object_id']),
+            models.Index(fields=['-created_at']),
+        ]
+
+    def __str__(self):
+        return f"{self.assessment_type} - {self.object_name}: {self.previous_risk_score} → {self.new_risk_score}"

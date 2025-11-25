@@ -323,6 +323,7 @@ class AIRemediationViewSet(viewsets.ModelViewSet):
 class RemediationFeedbackViewSet(viewsets.ModelViewSet):
     """
     ViewSet for handling feedback on AI remediations
+    UPDATED: Store both positive and negative feedback in Vector DB
     """
     queryset = RemediationFeedback.objects.all()
     serializer_class = RemediationFeedbackSerializer
@@ -379,13 +380,14 @@ class RemediationFeedbackViewSet(viewsets.ModelViewSet):
             return Response({
                 'message': 'Feedback received and queued for processing',
                 'task_id': task.id,
-                'feedback_id': str(feedback.id)
+                'feedback_id': str(feedback.id),
+                'feedback_type': 'positive' if was_helpful else 'negative'
             }, status=status.HTTP_202_ACCEPTED)
         else:
             # Synchronous processing
             try:
                 ai_service = AIRemediationService()
-                vector_id = ai_service.process_feedback(
+                vector_id, success_vector_id = ai_service.process_feedback(
                     remediation,
                     was_helpful,
                     comments,
@@ -402,7 +404,13 @@ class RemediationFeedbackViewSet(viewsets.ModelViewSet):
                 )
                 
                 response_serializer = RemediationFeedbackSerializer(feedback)
-                return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+                return Response({
+                    **response_serializer.data,
+                    'feedback_type': 'positive' if was_helpful else 'negative',
+                    'vector_db_stored': True,
+                    'feedback_vector_id': vector_id,
+                    'success_vector_id': success_vector_id
+                }, status=status.HTTP_201_CREATED)
                 
             except Exception as e:
                 return Response(
@@ -960,14 +968,7 @@ class VulnerabilityRiskAssessmentViewSet(viewsets.ReadOnlyModelViewSet):
         Manually override a vulnerability risk assessment
         POST /api/vulnerability-risks/{id}/override/
         
-        Body:
-        {
-            "new_risk_score": 95,
-            "new_risk_level": "critical",
-            "new_priority": "p1_immediate",
-            "override_reason": "Active exploitation observed in production",
-            "overridden_by": "security.team@company.com"
-        }
+        UPDATED: Store override in Vector DB as risk insight
         """
         from django.utils import timezone
         
@@ -1005,14 +1006,6 @@ class VulnerabilityRiskAssessmentViewSet(viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        if new_priority:
-            valid_priorities = ['p1_immediate', 'p2_urgent', 'p3_high', 'p4_medium', 'p5_low']
-            if new_priority not in valid_priorities:
-                return Response(
-                    {'error': f'new_priority must be one of: {", ".join(valid_priorities)}'},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-        
         if not override_reason:
             return Response(
                 {'error': 'override_reason is required'},
@@ -1040,8 +1033,53 @@ class VulnerabilityRiskAssessmentViewSet(viewsets.ReadOnlyModelViewSet):
         assessment.overridden_at = timezone.now()
         assessment.save()
         
+        # NEW: Store in Vector DB for AI learning
+        try:
+            vulnerability = assessment.vulnerability
+            asset = vulnerability.asset
+            
+            vuln_data = {
+                'control_title': vulnerability.control_title,
+                'control_description': vulnerability.control_description,
+                'control_impact': vulnerability.control_impact,
+                'severity': vulnerability.severity,
+                'category': vulnerability.category,
+                'owasp': vulnerability.owasp,
+                'cve_id': vulnerability.cve_id,
+                'cwe_id': vulnerability.cwe_id,
+            }
+            
+            asset_data = asset.get_sanitized_details()
+            
+            previous_assessment = {
+                'risk_score': previous_score,
+                'risk_level': previous_level,
+                'priority': assessment.priority,
+                'reasoning': assessment.reasoning,
+                'key_risk_factors': assessment.key_risk_factors
+            }
+            
+            new_assessment = {
+                'risk_score': new_risk_score,
+                'risk_level': new_risk_level,
+                'priority': new_priority or assessment.priority,
+                'reasoning': assessment.reasoning,
+                'key_risk_factors': assessment.key_risk_factors
+            }
+            
+            ai_service = AIRemediationService()
+            vector_db_id = ai_service.vector_db.store_risk_assessment_update(
+                vuln_data,
+                asset_data,
+                previous_assessment,
+                new_assessment,
+                'override',
+                override_reason
+            )
+        except Exception as e:
+            print(f"Error storing risk override in Vector DB: {str(e)}")
+        
         # Create history record
-        from .models import RiskAssessmentHistory
         RiskAssessmentHistory.objects.create(
             assessment_type='vulnerability',
             object_id=assessment.vulnerability.id,
@@ -1056,7 +1094,8 @@ class VulnerabilityRiskAssessmentViewSet(viewsets.ReadOnlyModelViewSet):
         serializer = self.get_serializer(assessment)
         return Response({
             'message': 'Risk assessment overridden successfully',
-            'assessment': serializer.data
+            'assessment': serializer.data,
+            'vector_db_updated': True
         }, status=status.HTTP_200_OK)
 
 
@@ -1066,10 +1105,7 @@ class VulnerabilityRiskAssessmentViewSet(viewsets.ReadOnlyModelViewSet):
         Remove manual override and revert to AI calculation
         POST /api/vulnerability-risks/{id}/remove_override/
         
-        Body:
-        {
-            "reason": "Override no longer needed, reverting to AI assessment"
-        }
+        UPDATED: Store revert action in Vector DB
         """
         assessment = self.get_object()
         
@@ -1084,6 +1120,7 @@ class VulnerabilityRiskAssessmentViewSet(viewsets.ReadOnlyModelViewSet):
         # Store values before recalculation
         previous_score = assessment.risk_score
         previous_level = assessment.risk_level
+        previous_reason = assessment.override_reason
         
         # Recalculate with AI
         from .risk_scoring_service import RiskScoringService
@@ -1091,6 +1128,52 @@ class VulnerabilityRiskAssessmentViewSet(viewsets.ReadOnlyModelViewSet):
         try:
             risk_service = RiskScoringService()
             risk_data = risk_service.calculate_vulnerability_risk(assessment.vulnerability)
+            
+            # NEW: Store revert action in Vector DB before updating
+            try:
+                vulnerability = assessment.vulnerability
+                asset = vulnerability.asset
+                
+                vuln_data = {
+                    'control_title': vulnerability.control_title,
+                    'control_description': vulnerability.control_description,
+                    'control_impact': vulnerability.control_impact,
+                    'severity': vulnerability.severity,
+                    'category': vulnerability.category,
+                    'owasp': vulnerability.owasp,
+                    'cve_id': vulnerability.cve_id,
+                    'cwe_id': vulnerability.cwe_id,
+                }
+                
+                asset_data = asset.get_sanitized_details()
+                
+                previous_assessment = {
+                    'risk_score': previous_score,
+                    'risk_level': previous_level,
+                    'priority': assessment.priority,
+                    'reasoning': previous_reason,
+                    'key_risk_factors': assessment.key_risk_factors
+                }
+                
+                new_assessment = {
+                    'risk_score': risk_data['risk_score'],
+                    'risk_level': risk_data['risk_level'],
+                    'priority': risk_data.get('priority', assessment.priority),
+                    'reasoning': risk_data.get('reasoning', ''),
+                    'key_risk_factors': risk_data.get('key_risk_factors', [])
+                }
+                
+                ai_service = AIRemediationService()
+                ai_service.vector_db.store_risk_assessment_update(
+                    vuln_data,
+                    asset_data,
+                    previous_assessment,
+                    new_assessment,
+                    'revert',
+                    f'Reverted override: {reason}'
+                )
+            except Exception as e:
+                print(f"Error storing risk revert in Vector DB: {str(e)}")
             
             # Update assessment
             for key, value in risk_data.items():
@@ -1103,7 +1186,6 @@ class VulnerabilityRiskAssessmentViewSet(viewsets.ReadOnlyModelViewSet):
             assessment.save()
             
             # Create history record
-            from .models import RiskAssessmentHistory
             RiskAssessmentHistory.objects.create(
                 assessment_type='vulnerability',
                 object_id=assessment.vulnerability.id,
@@ -1118,7 +1200,8 @@ class VulnerabilityRiskAssessmentViewSet(viewsets.ReadOnlyModelViewSet):
             serializer = self.get_serializer(assessment)
             return Response({
                 'message': 'Override removed, reverted to AI calculation',
-                'assessment': serializer.data
+                'assessment': serializer.data,
+                'vector_db_updated': True
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
@@ -1126,7 +1209,6 @@ class VulnerabilityRiskAssessmentViewSet(viewsets.ReadOnlyModelViewSet):
                 {'error': f'Failed to recalculate: {str(e)}'},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
-
 
 class AssetRiskAssessmentViewSet(viewsets.ReadOnlyModelViewSet):
     """ViewSet for asset risk assessments"""

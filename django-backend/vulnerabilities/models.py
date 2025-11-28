@@ -2,6 +2,18 @@ from django.db import models
 from django.core.validators import URLValidator
 import uuid
 
+class RiskAssessmentEnhancements(models.Model):
+    """Reusable enhancement fields for all Risk Assessment models."""
+    
+    has_active_contexts = models.BooleanField(default=False)
+    active_context_count = models.IntegerField(default=0)
+    has_manual_override = models.BooleanField(default=False)
+    current_override_id = models.UUIDField(null=True, blank=True)
+
+    class Meta:
+        abstract = True
+
+
 class Organization(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=255)
@@ -194,7 +206,7 @@ class RemediationUpdate(models.Model):
         return f"Update for {self.remediation.id} at {self.created_at}"
     
 
-class VulnerabilityRiskAssessment(models.Model):
+class VulnerabilityRiskAssessment(RiskAssessmentEnhancements, models.Model):
     """Risk assessment for individual vulnerabilities"""
     RISK_LEVEL_CHOICES = [
         ('critical', 'Critical'),
@@ -265,7 +277,7 @@ class VulnerabilityRiskAssessment(models.Model):
         return f"Risk: {self.risk_score} - {self.vulnerability.control_title}"
 
 
-class AssetRiskAssessment(models.Model):
+class AssetRiskAssessment(RiskAssessmentEnhancements, models.Model):
     """Aggregated risk assessment for assets"""
     RISK_LEVEL_CHOICES = [
         ('critical', 'Critical'),
@@ -347,7 +359,7 @@ class AssetRiskAssessment(models.Model):
         return f"Risk: {self.risk_score} - {self.asset.name}"
 
 
-class OrganizationRiskAssessment(models.Model):
+class OrganizationRiskAssessment(RiskAssessmentEnhancements, models.Model):
     """Organization-wide risk assessment"""
     RISK_LEVEL_CHOICES = [
         ('critical', 'Critical'),
@@ -459,3 +471,172 @@ class RiskAssessmentHistory(models.Model):
 
     def __str__(self):
         return f"{self.assessment_type} - {self.object_name}: {self.previous_risk_score} → {self.new_risk_score}"
+    
+
+class RiskContext(models.Model):
+    """
+    Additional context for risk assessments that influences AI calculation
+    Allows multiple context additions without directly overriding scores
+    """
+    CONTEXT_TYPE_CHOICES = [
+        ('vulnerability', 'Vulnerability'),
+        ('asset', 'Asset'),
+        ('organization', 'Organization'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    context_type = models.CharField(max_length=20, choices=CONTEXT_TYPE_CHOICES)
+    object_id = models.UUIDField()
+    
+    # Context details
+    context_text = models.TextField(
+        help_text="Additional context that influences risk calculation"
+    )
+    added_by = models.CharField(max_length=255)
+    added_at = models.DateTimeField(auto_now_add=True)
+    
+    # Whether this context is currently active
+    is_active = models.BooleanField(default=True)
+    
+    # Risk calculation result after this context was added
+    resulting_risk_score = models.IntegerField(null=True, blank=True)
+    resulting_risk_level = models.CharField(max_length=20, blank=True)
+    resulting_priority = models.CharField(max_length=20, blank=True)
+    
+    class Meta:
+        ordering = ['-added_at']
+        indexes = [
+            models.Index(fields=['context_type', 'object_id']),
+            models.Index(fields=['is_active']),
+        ]
+    
+    def __str__(self):
+        return f"Context for {self.context_type} {self.object_id} by {self.added_by}"
+
+
+class RiskOverrideHistory(models.Model):
+    """
+    Track manual overrides of risk scores with full history
+    Allows reverting to any previous state
+    """
+    OVERRIDE_TYPE_CHOICES = [
+        ('vulnerability', 'Vulnerability'),
+        ('asset', 'Asset'),
+        ('organization', 'Organization'),
+    ]
+    
+    ACTION_CHOICES = [
+        ('override', 'Manual Override'),
+        ('revert', 'Revert to Previous State'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    override_type = models.CharField(max_length=20, choices=OVERRIDE_TYPE_CHOICES)
+    object_id = models.UUIDField()
+    
+    # Action details
+    action = models.CharField(max_length=20, choices=ACTION_CHOICES)
+    
+    # State before this action
+    previous_risk_score = models.IntegerField(null=True, blank=True)
+    previous_risk_level = models.CharField(max_length=20, blank=True)
+    previous_priority = models.CharField(max_length=20, blank=True)
+    
+    # State after this action
+    new_risk_score = models.IntegerField()
+    new_risk_level = models.CharField(max_length=20)
+    new_priority = models.CharField(max_length=20)
+    
+    # Override details
+    reason = models.TextField(help_text="Reason for override or revert")
+    performed_by = models.CharField(max_length=255)
+    performed_at = models.DateTimeField(auto_now_add=True)
+    
+    # Whether this is the current active state
+    is_current_state = models.BooleanField(default=True)
+    
+    class Meta:
+        ordering = ['-performed_at']
+        indexes = [
+            models.Index(fields=['override_type', 'object_id']),
+            models.Index(fields=['is_current_state']),
+        ]
+    
+    def __str__(self):
+        return f"{self.action} for {self.override_type} {self.object_id}"
+
+
+class RiskContextChat(models.Model):
+    """
+    Chat sessions for applying context across similar vulnerabilities
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    session_id = models.UUIDField(default=uuid.uuid4, editable=False)
+    
+    # Original context that triggered the chat
+    source_context = models.ForeignKey(
+        RiskContext, 
+        on_delete=models.CASCADE, 
+        related_name='chat_sessions'
+    )
+    
+    # Similar vulnerabilities found
+    similar_vulnerabilities = models.JSONField(
+        default=list,
+        help_text="List of similar vulnerability IDs found"
+    )
+    
+    # Detailed metadata about similar vulnerabilities
+    similar_vulnerabilities_metadata = models.JSONField(
+        default=list,
+        help_text="Full metadata about similar vulnerabilities (title, confidence, etc.)"
+    )
+    
+    # User's decision
+    user_approved = models.BooleanField(null=True, blank=True)
+    user_response = models.TextField(blank=True)
+    
+    # AI-detected intent from last message
+    detected_intent = models.CharField(max_length=50, blank=True)
+    intent_confidence = models.CharField(max_length=20, blank=True)
+    
+    # Application results
+    contexts_applied = models.JSONField(
+        default=list,
+        help_text="List of context IDs created from this chat"
+    )
+    
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"Risk Context Chat {self.session_id}"
+
+
+class RiskContextChatMessage(models.Model):
+    """Messages in risk context chat sessions"""
+    ROLE_CHOICES = [
+        ('user', 'User'),
+        ('assistant', 'Assistant'),
+        ('system', 'System'),
+    ]
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    chat_session = models.ForeignKey(
+        RiskContextChat, 
+        on_delete=models.CASCADE, 
+        related_name='messages'
+    )
+    role = models.CharField(max_length=10, choices=ROLE_CHOICES)
+    content = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        ordering = ['created_at']
+    
+    def __str__(self):
+        return f"{self.role}: {self.content[:50]}..."

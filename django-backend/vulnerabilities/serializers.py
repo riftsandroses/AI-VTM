@@ -3,7 +3,8 @@ from .models import (
     Organization, Asset, Vulnerability, TesterArtifact,
     AIRemediation, RemediationFeedback, RemediationChat, ChatMessage,
     RemediationUpdate, VulnerabilityRiskAssessment, AssetRiskAssessment, 
-    OrganizationRiskAssessment, RiskAssessmentHistory
+    OrganizationRiskAssessment, RiskAssessmentHistory, RiskContext, 
+    RiskOverrideHistory, RiskContextChat, RiskContextChatMessage
 )
 
 
@@ -417,3 +418,194 @@ class BulkRiskCalculationSerializer(serializers.Serializer):
     )
     object_id = serializers.UUIDField(required=False)
     recalculate_existing = serializers.BooleanField(default=False)
+
+
+class RiskContextSerializer(serializers.ModelSerializer):
+    """Serializer for risk context additions"""
+    
+    class Meta:
+        model = RiskContext
+        fields = [
+            'id', 'context_type', 'object_id', 'context_text',
+            'added_by', 'added_at', 'is_active',
+            'resulting_risk_score', 'resulting_risk_level', 'resulting_priority'
+        ]
+        read_only_fields = [
+            'id', 'added_at', 'resulting_risk_score', 
+            'resulting_risk_level', 'resulting_priority'
+        ]
+
+
+class AddRiskContextSerializer(serializers.Serializer):
+    """Serializer for adding context to risk assessment"""
+    context_type = serializers.ChoiceField(
+        choices=['vulnerability', 'asset', 'organization']
+    )
+    object_id = serializers.UUIDField()
+    context_text = serializers.CharField()
+    added_by = serializers.CharField()
+
+
+class RemoveRiskContextSerializer(serializers.Serializer):
+    """Serializer for removing context"""
+    context_id = serializers.UUIDField()
+
+
+class RiskOverrideHistorySerializer(serializers.ModelSerializer):
+    """Serializer for risk override history"""
+    score_change = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = RiskOverrideHistory
+        fields = [
+            'id', 'override_type', 'object_id', 'action',
+            'previous_risk_score', 'new_risk_score', 'score_change',
+            'previous_risk_level', 'new_risk_level',
+            'previous_priority', 'new_priority',
+            'reason', 'performed_by', 'performed_at', 'is_current_state'
+        ]
+        read_only_fields = ['id', 'performed_at']
+    
+    def get_score_change(self, obj):
+        if obj.previous_risk_score is not None:
+            return obj.new_risk_score - obj.previous_risk_score
+        return obj.new_risk_score
+
+
+class ManualOverrideSerializer(serializers.Serializer):
+    """Serializer for manual override of risk scores"""
+    override_type = serializers.ChoiceField(
+        choices=['vulnerability', 'asset', 'organization']
+    )
+    object_id = serializers.UUIDField()
+    new_risk_score = serializers.IntegerField(min_value=0, max_value=100)
+    new_risk_level = serializers.ChoiceField(
+        choices=['critical', 'high', 'medium', 'low', 'informational', 'none']
+    )
+    new_priority = serializers.CharField()
+    reason = serializers.CharField()
+    performed_by = serializers.CharField()
+
+
+class RevertToStateSerializer(serializers.Serializer):
+    """Serializer for reverting to a previous state"""
+    override_history_id = serializers.UUIDField()
+    reason = serializers.CharField()
+    performed_by = serializers.CharField()
+
+
+class RiskContextChatMessageSerializer(serializers.ModelSerializer):
+    """Serializer for risk context chat messages"""
+    
+    class Meta:
+        model = RiskContextChatMessage
+        fields = ['id', 'role', 'content', 'created_at']
+        read_only_fields = ['id', 'created_at']
+
+
+class RiskContextChatSerializer(serializers.ModelSerializer):
+    """Serializer for risk context chat sessions"""
+    messages = RiskContextChatMessageSerializer(many=True, read_only=True)
+    source_context_details = RiskContextSerializer(
+        source='source_context', 
+        read_only=True
+    )
+    similar_vulnerability_details = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = RiskContextChat
+        fields = [
+            'id', 'session_id', 'source_context', 'source_context_details',
+            'similar_vulnerabilities', 'similar_vulnerability_details',
+            'user_approved', 'user_response', 'contexts_applied',
+            'is_active', 'created_at', 'updated_at', 'messages'
+        ]
+        read_only_fields = ['id', 'session_id', 'created_at', 'updated_at']
+    
+    def get_similar_vulnerability_details(self, obj):
+        from .models import Vulnerability
+        
+        vuln_ids = obj.similar_vulnerabilities
+        if not vuln_ids:
+            return []
+        
+        vulnerabilities = Vulnerability.objects.filter(
+            id__in=vuln_ids
+        ).select_related('asset')
+        
+        return [
+            {
+                'id': str(v.id),
+                'title': v.control_title,
+                'severity': v.severity,
+                'category': v.category,
+                'asset_name': v.asset.name,
+                'asset_type': v.asset.asset_type
+            }
+            for v in vulnerabilities
+        ]
+
+
+class ApplyContextToSimilarSerializer(serializers.Serializer):
+    """Serializer for applying context to similar vulnerabilities"""
+    chat_session_id = serializers.UUIDField()
+    approved = serializers.BooleanField()
+    selected_vulnerability_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        required=False,
+        allow_empty=True
+    )
+    user_message = serializers.CharField(required=False, allow_blank=True)
+
+
+class EnhancedVulnerabilityRiskAssessmentSerializer(serializers.ModelSerializer):
+    """Enhanced serializer with context and override info"""
+    vulnerability_title = serializers.CharField(
+        source='vulnerability.control_title', 
+        read_only=True
+    )
+    active_contexts = serializers.SerializerMethodField()
+    override_history_count = serializers.SerializerMethodField()
+    has_pending_similar_suggestions = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = VulnerabilityRiskAssessment
+        fields = [
+            'id', 'vulnerability', 'vulnerability_title',
+            'risk_score', 'risk_level', 'priority',
+            'reasoning', 'key_risk_factors', 'recommended_timeline',
+            'model_used', 'calculated_at', 'last_updated',
+            'has_active_contexts', 'active_context_count',
+            'has_manual_override', 'current_override_id',
+            'active_contexts', 'override_history_count',
+            'has_pending_similar_suggestions'
+        ]
+        read_only_fields = ['id', 'model_used', 'calculated_at', 'last_updated']
+    
+    def get_active_contexts(self, obj):
+        contexts = RiskContext.objects.filter(
+            context_type='vulnerability',
+            object_id=obj.vulnerability.id,
+            is_active=True
+        ).order_by('-added_at')
+        
+        return RiskContextSerializer(contexts, many=True).data
+    
+    def get_override_history_count(self, obj):
+        return RiskOverrideHistory.objects.filter(
+            override_type='vulnerability',
+            object_id=obj.vulnerability.id
+        ).count()
+    
+    def get_has_pending_similar_suggestions(self, obj):
+        # Check if there are any active chat sessions for contexts on this vulnerability
+        active_contexts = RiskContext.objects.filter(
+            context_type='vulnerability',
+            object_id=obj.vulnerability.id,
+            is_active=True
+        )
+        
+        return RiskContextChat.objects.filter(
+            source_context__in=active_contexts,
+            is_active=True
+        ).exists()

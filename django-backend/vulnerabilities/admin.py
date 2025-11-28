@@ -1,11 +1,11 @@
-# admin.py
 from django.contrib import admin
 from .models import (
     Organization, Asset, Vulnerability, TesterArtifact,
     AIRemediation, RemediationFeedback, RemediationChat, 
     ChatMessage, RemediationUpdate, VulnerabilityRiskAssessment, 
     AssetRiskAssessment, OrganizationRiskAssessment,
-    RiskAssessmentHistory
+    RiskAssessmentHistory, RiskContext, RiskOverrideHistory, 
+    RiskContextChat
 )
 from .risk_scoring_service import RiskScoringService
 
@@ -33,6 +33,7 @@ class AssetAdmin(admin.ModelAdmin):
     list_filter = ['asset_type', 'organization']
     search_fields = ['name', 'description', 'technology_stack']
     readonly_fields = ['id', 'created_at', 'updated_at']
+    
     fieldsets = (
         ('Basic Information', {
             'fields': ('id', 'organization', 'name', 'asset_type', 'description')
@@ -200,142 +201,119 @@ class RemediationUpdateAdmin(admin.ModelAdmin):
     update_reason_preview.short_description = 'Reason'
 
 
+# =========================
+# ★ UPDATED RISK ADMIN SECTIONS WITH CONTEXT + OVERRIDE
+# =========================
+
+
 @admin.register(VulnerabilityRiskAssessment)
 class VulnerabilityRiskAssessmentAdmin(admin.ModelAdmin):
     list_display = [
         'vulnerability_title', 'risk_score', 'risk_level', 
-        'priority', 'calculated_at', 'is_overridden'
+        'priority', 'calculated_at', 'is_overridden',
+        'has_contexts', 'has_override'
     ]
     list_filter = ['risk_level', 'priority', 'is_overridden', 'calculated_at']
-    search_fields = [
-        'vulnerability__control_title', 
-        'reasoning', 
-        'key_risk_factors'
-    ]
-    readonly_fields = [
-        'id', 'vulnerability', 'model_used', 
-        'calculated_at', 'last_updated'
-    ]
-    
+    search_fields = ['vulnerability__control_title', 'reasoning', 'key_risk_factors']
+    readonly_fields = ['id', 'vulnerability', 'model_used', 'calculated_at', 'last_updated']
+
+    def has_contexts(self, obj):
+        return '✓' if getattr(obj, "has_active_contexts", False) else '✗'
+    has_contexts.short_description = 'Contexts'
+    has_contexts.boolean = True
+
+    def has_override(self, obj):
+        return '✓' if getattr(obj, "has_manual_override", False) else '✗'
+    has_override.short_description = 'Override'
+    has_override.boolean = True
+        
     fieldsets = (
-        ('Vulnerability', {
-            'fields': ('id', 'vulnerability')
-        }),
-        ('Risk Assessment', {
-            'fields': (
-                'risk_score', 'risk_level', 'priority', 
-                'recommended_timeline'
-            )
-        }),
-        ('AI Analysis', {
-            'fields': ('reasoning', 'key_risk_factors', 'model_used')
-        }),
+        ('Vulnerability', {'fields': ('id', 'vulnerability')}),
+        ('Risk Assessment', {'fields': ('risk_score', 'risk_level', 'priority', 'recommended_timeline')}),
+        ('AI Analysis', {'fields': ('reasoning', 'key_risk_factors', 'model_used')}),
         ('Override Information', {
-            'fields': (
-                'is_overridden', 'override_reason', 
-                'overridden_by', 'overridden_at'
-            ),
+            'fields': ('is_overridden', 'override_reason', 'overridden_by', 'overridden_at'),
             'classes': ('collapse',)
         }),
-        ('Timestamps', {
-            'fields': ('calculated_at', 'last_updated')
+        ('Context & Override Information', {
+            'fields': ('has_active_contexts', 'active_context_count', 'has_manual_override', 'current_override_id'),
+            'classes': ('collapse',)
         }),
+        ('Timestamps', {'fields': ('calculated_at', 'last_updated')}),
     )
-    
+
     def vulnerability_title(self, obj):
         return obj.vulnerability.control_title
     vulnerability_title.short_description = 'Vulnerability'
     vulnerability_title.admin_order_field = 'vulnerability__control_title'
-    
+
+
     actions = ['recalculate_risk']
     
     def recalculate_risk(self, request, queryset):
-        
-        
         risk_service = RiskScoringService()
         updated = 0
         
         for assessment in queryset:
             try:
-                risk_data = risk_service.calculate_vulnerability_risk(
-                    assessment.vulnerability
-                )
+                risk_data = risk_service.calculate_vulnerability_risk(assessment.vulnerability)
                 for key, value in risk_data.items():
                     setattr(assessment, key, value)
                 assessment.save()
                 updated += 1
             except Exception as e:
-                self.message_user(
-                    request, 
-                    f"Error updating {assessment.vulnerability.control_title}: {str(e)}",
-                    level='ERROR'
-                )
+                self.message_user(request, f"Error updating {assessment.vulnerability.control_title}: {str(e)}", level='ERROR')
         
-        self.message_user(
-            request, 
-            f"Successfully recalculated {updated} risk assessments."
-        )
-    
+        self.message_user(request, f"Successfully recalculated {updated} risk assessments.")
     recalculate_risk.short_description = "Recalculate selected risk assessments"
+
 
 
 @admin.register(AssetRiskAssessment)
 class AssetRiskAssessmentAdmin(admin.ModelAdmin):
     list_display = [
         'asset_name', 'risk_score', 'risk_level', 
-        'priority', 'calculated_at', 'is_overridden'
+        'priority', 'calculated_at', 'is_overridden',
+        'has_contexts', 'has_override'
     ]
     list_filter = ['risk_level', 'priority', 'is_overridden', 'calculated_at']
-    search_fields = [
-        'asset__name', 
-        'reasoning', 
-        'key_risk_factors'
-    ]
-    readonly_fields = [
-        'id', 'asset', 'model_used', 
-        'calculated_at', 'last_updated', 'vulnerability_summary'
-    ]
-    
+    search_fields = ['asset__name', 'reasoning', 'key_risk_factors']
+    readonly_fields = ['id', 'asset', 'model_used', 'calculated_at', 'last_updated', 'vulnerability_summary']
+
+    def has_contexts(self, obj):
+        return '✓' if getattr(obj, "has_active_contexts", False) else '✗'
+    has_contexts.short_description = 'Contexts'
+    has_contexts.boolean = True
+
+    def has_override(self, obj):
+        return '✓' if getattr(obj, "has_manual_override", False) else '✗'
+    has_override.short_description = 'Override'
+    has_override.boolean = True
+
     fieldsets = (
-        ('Asset', {
-            'fields': ('id', 'asset')
-        }),
-        ('Risk Assessment', {
-            'fields': (
-                'risk_score', 'risk_level', 'priority', 
-                'estimated_remediation_effort'
-            )
-        }),
-        ('AI Analysis', {
-            'fields': (
-                'reasoning', 'key_risk_factors', 
-                'remediation_priority', 'model_used'
-            )
-        }),
-        ('Vulnerability Summary', {
-            'fields': ('vulnerability_summary',)
-        }),
+        ('Asset', {'fields': ('id', 'asset')}),
+        ('Risk Assessment', {'fields': ('risk_score', 'risk_level', 'priority', 'estimated_remediation_effort')}),
+        ('AI Analysis', {'fields': ('reasoning', 'key_risk_factors', 'remediation_priority', 'model_used')}),
+        ('Vulnerability Summary', {'fields': ('vulnerability_summary',)}),
         ('Override Information', {
-            'fields': (
-                'is_overridden', 'override_reason', 
-                'overridden_by', 'overridden_at'
-            ),
+            'fields': ('is_overridden', 'override_reason', 'overridden_by', 'overridden_at'),
             'classes': ('collapse',)
         }),
-        ('Timestamps', {
-            'fields': ('calculated_at', 'last_updated')
+        ('Context & Override Information', {
+            'fields': ('has_active_contexts', 'active_context_count', 'has_manual_override', 'current_override_id'),
+            'classes': ('collapse',)
         }),
+        ('Timestamps', {'fields': ('calculated_at', 'last_updated')}),
     )
-    
+
     def asset_name(self, obj):
         return obj.asset.name
     asset_name.short_description = 'Asset'
     asset_name.admin_order_field = 'asset__name'
-    
+
     actions = ['recalculate_risk']
     
     def recalculate_risk(self, request, queryset):
-        
         risk_service = RiskScoringService()
         updated = 0
         
@@ -347,100 +325,76 @@ class AssetRiskAssessmentAdmin(admin.ModelAdmin):
                 assessment.save()
                 updated += 1
             except Exception as e:
-                self.message_user(
-                    request, 
-                    f"Error updating {assessment.asset.name}: {str(e)}",
-                    level='ERROR'
-                )
+                self.message_user(request, f"Error updating {assessment.asset.name}: {str(e)}", level='ERROR')
         
-        self.message_user(
-            request, 
-            f"Successfully recalculated {updated} risk assessments."
-        )
-    
+        self.message_user(request, f"Successfully recalculated {updated} risk assessments.")
     recalculate_risk.short_description = "Recalculate selected risk assessments"
+
 
 
 @admin.register(OrganizationRiskAssessment)
 class OrganizationRiskAssessmentAdmin(admin.ModelAdmin):
     list_display = [
         'organization_name', 'risk_score', 'risk_level', 
-        'calculated_at', 'is_overridden'
+        'calculated_at', 'is_overridden',
+        'has_contexts', 'has_override'
     ]
     list_filter = ['risk_level', 'is_overridden', 'calculated_at']
-    search_fields = [
-        'organization__name', 
-        'reasoning', 
-        'key_risk_factors'
-    ]
-    readonly_fields = [
-        'id', 'organization', 'model_used', 
-        'calculated_at', 'last_updated', 'asset_summary'
-    ]
-    
+    search_fields = ['organization__name', 'reasoning', 'key_risk_factors']
+    readonly_fields = ['id', 'organization', 'model_used', 'calculated_at', 'last_updated', 'asset_summary']
+
+    def has_contexts(self, obj):
+        return '✓' if getattr(obj, "has_active_contexts", False) else '✗'
+    has_contexts.short_description = 'Contexts'
+    has_contexts.boolean = True
+
+    def has_override(self, obj):
+        return '✓' if getattr(obj, "has_manual_override", False) else '✗'
+    has_override.short_description = 'Override'
+    has_override.boolean = True
+
     fieldsets = (
-        ('Organization', {
-            'fields': ('id', 'organization')
-        }),
-        ('Risk Assessment', {
-            'fields': ('risk_score', 'risk_level', 'priority')
-        }),
+        ('Organization', {'fields': ('id', 'organization')}),
+        ('Risk Assessment', {'fields': ('risk_score', 'risk_level', 'priority')}),
         ('AI Analysis', {
-            'fields': (
-                'reasoning', 'key_risk_factors', 
-                'strategic_recommendations', 'focus_areas', 
-                'model_used'
-            )
+            'fields': ('reasoning', 'key_risk_factors', 'strategic_recommendations', 'focus_areas', 'model_used')
         }),
-        ('Asset Summary', {
-            'fields': ('asset_summary',)
-        }),
+        ('Asset Summary', {'fields': ('asset_summary',)}),
         ('Override Information', {
-            'fields': (
-                'is_overridden', 'override_reason', 
-                'overridden_by', 'overridden_at'
-            ),
+            'fields': ('is_overridden', 'override_reason', 'overridden_by', 'overridden_at'),
             'classes': ('collapse',)
         }),
-        ('Timestamps', {
-            'fields': ('calculated_at', 'last_updated')
+        ('Context & Override Information', {
+            'fields': ('has_active_contexts', 'active_context_count', 'has_manual_override', 'current_override_id'),
+            'classes': ('collapse',)
         }),
+        ('Timestamps', {'fields': ('calculated_at', 'last_updated')}),
     )
-    
+
     def organization_name(self, obj):
         return obj.organization.name
     organization_name.short_description = 'Organization'
     organization_name.admin_order_field = 'organization__name'
-    
+
     actions = ['recalculate_risk']
     
     def recalculate_risk(self, request, queryset):
-        
         risk_service = RiskScoringService()
         updated = 0
         
         for assessment in queryset:
             try:
-                risk_data = risk_service.calculate_organization_risk(
-                    assessment.organization
-                )
+                risk_data = risk_service.calculate_organization_risk(assessment.organization)
                 for key, value in risk_data.items():
                     setattr(assessment, key, value)
                 assessment.save()
                 updated += 1
             except Exception as e:
-                self.message_user(
-                    request, 
-                    f"Error updating {assessment.organization.name}: {str(e)}",
-                    level='ERROR'
-                )
+                self.message_user(request, f"Error updating {assessment.organization.name}: {str(e)}", level='ERROR')
         
-        self.message_user(
-            request, 
-            f"Successfully recalculated {updated} risk assessments."
-        )
-    
+        self.message_user(request, f"Successfully recalculated {updated} risk assessments.")
     recalculate_risk.short_description = "Recalculate selected risk assessments"
+
 
 
 @admin.register(RiskAssessmentHistory)
@@ -462,9 +416,7 @@ class RiskAssessmentHistoryAdmin(admin.ModelAdmin):
     def risk_score_change(self, obj):
         if obj.previous_risk_score is not None:
             change = obj.new_risk_score - obj.previous_risk_score
-            if change > 0:
-                return f"+{change}"
-            return str(change)
+            return f"+{change}" if change > 0 else str(change)
         return "N/A"
     risk_score_change.short_description = 'Change'
     
@@ -475,4 +427,107 @@ class RiskAssessmentHistoryAdmin(admin.ModelAdmin):
         return False
     
     def has_delete_permission(self, request, obj=None):
+        return False   
+
+
+@admin.register(RiskContext)
+class RiskContextAdmin(admin.ModelAdmin):
+    list_display = [
+        'context_type', 'object_id', 'added_by', 'added_at', 
+        'is_active', 'resulting_risk_score'
+    ]
+    list_filter = ['context_type', 'is_active', 'added_at']
+    search_fields = ['context_text', 'added_by']
+    readonly_fields = [
+        'id', 'added_at', 'resulting_risk_score', 
+        'resulting_risk_level', 'resulting_priority'
+    ]
+    
+    fieldsets = (
+        ('Object Information', {'fields': ('id', 'context_type', 'object_id')}),
+        ('Context', {'fields': ('context_text', 'is_active')}),
+        ('Added By', {'fields': ('added_by', 'added_at')}),
+        ('Resulting Risk', {
+            'fields': ('resulting_risk_score', 'resulting_risk_level', 'resulting_priority'),
+            'classes': ('collapse',)
+        }),
+    )
+    
+    def has_add_permission(self, request):
+        return False
+
+
+
+@admin.register(RiskOverrideHistory)
+class RiskOverrideHistoryAdmin(admin.ModelAdmin):
+    list_display = [
+        'override_type', 'object_id', 'action', 
+        'previous_risk_score', 'new_risk_score', 
+        'risk_change', 'performed_by', 'performed_at',
+        'is_current_state'
+    ]
+    list_filter = ['override_type', 'action', 'is_current_state', 'performed_at']
+    search_fields = ['reason', 'performed_by']
+    readonly_fields = [
+        'id', 'override_type', 'object_id', 'action',
+        'previous_risk_score', 'new_risk_score',
+        'previous_risk_level', 'new_risk_level',
+        'previous_priority', 'new_priority',
+        'reason', 'performed_by', 'performed_at'
+    ]
+    
+    fieldsets = (
+        ('Override Information', {
+            'fields': ('id', 'override_type', 'object_id', 'action', 'is_current_state')
+        }),
+        ('Previous State', {'fields': ('previous_risk_score', 'previous_risk_level', 'previous_priority')}),
+        ('New State', {'fields': ('new_risk_score', 'new_risk_level', 'new_priority')}),
+        ('Details', {'fields': ('reason', 'performed_by', 'performed_at')}),
+    )
+    
+    def risk_change(self, obj):
+        if obj.previous_risk_score is not None:
+            change = obj.new_risk_score - obj.previous_risk_score
+            return f"+{change}" if change > 0 else str(change)
+        return "N/A"
+    risk_change.short_description = 'Risk Change'
+    
+    def has_add_permission(self, request):
+        return False
+    
+    def has_change_permission(self, request, obj=None):
+        return False
+    
+    def has_delete_permission(self, request, obj=None):
+        return True
+
+
+
+@admin.register(RiskContextChat)
+class RiskContextChatAdmin(admin.ModelAdmin):
+    list_display = [
+        'session_id', 'source_context', 'similar_count',
+        'user_approved', 'is_active', 'created_at'
+    ]
+    list_filter = ['user_approved', 'is_active', 'created_at']
+    search_fields = ['session_id', 'user_response']
+    readonly_fields = [
+        'id', 'session_id', 'source_context', 'similar_vulnerabilities',
+        'contexts_applied', 'created_at', 'updated_at'
+    ]
+    
+    fieldsets = (
+        ('Chat Session', {'fields': ('id', 'session_id', 'is_active')}),
+        ('Source Context', {'fields': ('source_context',)}),
+        ('Similar Vulnerabilities', {'fields': ('similar_vulnerabilities',)}),
+        ('User Decision', {'fields': ('user_approved', 'user_response')}),
+        ('Application Results', {'fields': ('contexts_applied',)}),
+        ('Timestamps', {'fields': ('created_at', 'updated_at')}),
+    )
+    
+    def similar_count(self, obj):
+        return len(obj.similar_vulnerabilities) if obj.similar_vulnerabilities else 0
+    similar_count.short_description = 'Similar Vulns'
+    
+    def has_add_permission(self, request):
         return False

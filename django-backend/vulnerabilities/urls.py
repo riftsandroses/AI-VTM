@@ -13,7 +13,10 @@ from .views import (
     AssetRiskAssessmentViewSet,
     OrganizationRiskAssessmentViewSet,
     RiskAssessmentHistoryViewSet,
-    BulkRiskCalculationViewSet
+    BulkRiskCalculationViewSet,
+    RiskContextViewSet,
+    RiskOverrideViewSet,
+    RiskContextChatViewSet
 )
 
 router = DefaultRouter()
@@ -30,6 +33,9 @@ router.register(r'asset-risks', AssetRiskAssessmentViewSet, basename='asset-risk
 router.register(r'organization-risks', OrganizationRiskAssessmentViewSet, basename='organization-risk')
 router.register(r'risk-history', RiskAssessmentHistoryViewSet, basename='risk-history')
 router.register(r'bulk-risk', BulkRiskCalculationViewSet, basename='bulk-risk')
+router.register(r'risk-contexts', RiskContextViewSet, basename='risk-context')
+router.register(r'risk-overrides', RiskOverrideViewSet, basename='risk-override')
+router.register(r'risk-context-chats', RiskContextChatViewSet, basename='risk-context-chat')
 
 urlpatterns = [
     path('', include(router.urls)),

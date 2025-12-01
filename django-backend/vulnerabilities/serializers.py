@@ -609,3 +609,19 @@ class EnhancedVulnerabilityRiskAssessmentSerializer(serializers.ModelSerializer)
             source_context__in=active_contexts,
             is_active=True
         ).exists()
+    
+
+class VulnerabilityWithAssetDetailsSerializer(serializers.ModelSerializer):
+    """Vulnerability serializer with complete asset information"""
+    artifacts = TesterArtifactSerializer(many=True, read_only=True)
+    asset = AssetDetailSerializer(read_only=True)
+    
+    class Meta:
+        model = Vulnerability
+        fields = [
+            'id', 'asset',
+            'control_title', 'control_description', 'control_impact',
+            'control_recommendation', 'severity', 'affected_devices',
+            'category', 'owasp', 'cve_id', 'cwe_id',
+            'artifacts', 'created_at', 'updated_at'
+        ]

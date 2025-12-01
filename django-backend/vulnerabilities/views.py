@@ -84,7 +84,8 @@ from .serializers import (
     RiskContextChatSerializer,
     RiskContextChatMessageSerializer,
     ApplyContextToSimilarSerializer,
-    EnhancedVulnerabilityRiskAssessmentSerializer
+    EnhancedVulnerabilityRiskAssessmentSerializer,
+    VulnerabilityWithAssetDetailsSerializer
 )
 
 # ---------------------------------
@@ -184,7 +185,7 @@ class VulnerabilityViewSet(viewsets.ModelViewSet):
 
     def get_serializer_class(self):
         if self.action == 'retrieve':
-            return VulnerabilityDetailSerializer
+            return VulnerabilityWithAssetDetailsSerializer
         return VulnerabilityListSerializer
 
     @action(detail=False, methods=['get'])

@@ -8,6 +8,7 @@ from .models import (
     RiskContextChat
 )
 from .risk_scoring_service import RiskScoringService
+from .models import GlobalChatHistory
 
 @admin.register(Organization)
 class OrganizationAdmin(admin.ModelAdmin):
@@ -531,3 +532,52 @@ class RiskContextChatAdmin(admin.ModelAdmin):
     
     def has_add_permission(self, request):
         return False
+
+
+@admin.register(GlobalChatHistory)
+class GlobalChatHistoryAdmin(admin.ModelAdmin):
+    list_display = [
+        'query_preview', 'organization', 'query_type', 
+        'created_at', 'was_helpful'
+    ]
+    list_filter = ['query_type', 'was_helpful', 'created_at', 'organization']
+    search_fields = ['query', 'answer', 'intent']
+    readonly_fields = [
+        'id', 'query', 'intent', 'query_type', 'answer', 
+        'insights', 'summary_stats', 'visualization_config', 
+        'raw_data', 'user_identifier', 'session_id', 'created_at'
+    ]
+    
+    fieldsets = (
+        ('Query Information', {
+            'fields': ('id', 'organization', 'query', 'intent', 'query_type')
+        }),
+        ('Response', {
+            'fields': ('answer', 'insights', 'summary_stats')
+        }),
+        ('Visualization', {
+            'fields': ('visualization_config',),
+            'classes': ('collapse',)
+        }),
+        ('Raw Data', {
+            'fields': ('raw_data',),
+            'classes': ('collapse',)
+        }),
+        ('Metadata', {
+            'fields': ('user_identifier', 'session_id', 'created_at')
+        }),
+        ('Feedback', {
+            'fields': ('was_helpful', 'feedback_comments')
+        }),
+    )
+    
+    def query_preview(self, obj):
+        return obj.query[:100] + '...' if len(obj.query) > 100 else obj.query
+    query_preview.short_description = 'Query'
+    
+    def has_add_permission(self, request):
+        return False
+    
+    def has_change_permission(self, request, obj=None):
+        # Only allow changing feedback
+        return True

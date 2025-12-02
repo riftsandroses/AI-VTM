@@ -421,19 +421,85 @@ class BulkRiskCalculationSerializer(serializers.Serializer):
 
 
 class RiskContextSerializer(serializers.ModelSerializer):
-    """Serializer for risk context additions"""
+    """Serializer for risk context additions with chat session information"""
+    chat_session_id = serializers.SerializerMethodField()
+    has_active_chat_session = serializers.SerializerMethodField()
+    similar_vulnerabilities_count = serializers.SerializerMethodField()
+    chat_session_status = serializers.SerializerMethodField()
     
     class Meta:
         model = RiskContext
         fields = [
             'id', 'context_type', 'object_id', 'context_text',
             'added_by', 'added_at', 'is_active',
-            'resulting_risk_score', 'resulting_risk_level', 'resulting_priority'
+            'resulting_risk_score', 'resulting_risk_level', 'resulting_priority',
+            'chat_session_id', 'has_active_chat_session', 
+            'similar_vulnerabilities_count', 'chat_session_status'
         ]
         read_only_fields = [
             'id', 'added_at', 'resulting_risk_score', 
             'resulting_risk_level', 'resulting_priority'
         ]
+    
+    def get_chat_session_id(self, obj):
+        """Get the most recent chat session ID for this context"""
+        try:
+            from .models import RiskContextChat
+            chat_session = RiskContextChat.objects.filter(
+                source_context=obj
+            ).order_by('-created_at').first()
+            
+            return str(chat_session.id) if chat_session else None
+        except Exception as e:
+            return None
+    
+    def get_has_active_chat_session(self, obj):
+        """Check if there's an active chat session"""
+        try:
+            from .models import RiskContextChat
+            return RiskContextChat.objects.filter(
+                source_context=obj,
+                is_active=True
+            ).exists()
+        except Exception as e:
+            return False
+    
+    def get_similar_vulnerabilities_count(self, obj):
+        """Get count of similar vulnerabilities found"""
+        try:
+            from .models import RiskContextChat
+            chat_session = RiskContextChat.objects.filter(
+                source_context=obj
+            ).order_by('-created_at').first()
+            
+            if chat_session and chat_session.similar_vulnerabilities:
+                return len(chat_session.similar_vulnerabilities)
+            return 0
+        except Exception as e:
+            return 0
+    
+    def get_chat_session_status(self, obj):
+        """Get detailed chat session status"""
+        try:
+            from .models import RiskContextChat
+            chat_session = RiskContextChat.objects.filter(
+                source_context=obj
+            ).order_by('-created_at').first()
+            
+            if not chat_session:
+                return None
+            
+            return {
+                'id': str(chat_session.id),
+                'is_active': chat_session.is_active,
+                'user_approved': chat_session.user_approved,
+                'similar_vulnerabilities': chat_session.similar_vulnerabilities,
+                'contexts_applied': chat_session.contexts_applied,
+                'created_at': chat_session.created_at.isoformat() if chat_session.created_at else None,
+                'updated_at': chat_session.updated_at.isoformat() if chat_session.updated_at else None
+            }
+        except Exception as e:
+            return None
 
 
 class AddRiskContextSerializer(serializers.Serializer):
@@ -625,3 +691,34 @@ class VulnerabilityWithAssetDetailsSerializer(serializers.ModelSerializer):
             'category', 'owasp', 'cve_id', 'cwe_id',
             'artifacts', 'created_at', 'updated_at'
         ]
+
+
+class GlobalChatbotQuerySerializer(serializers.Serializer):
+    """Serializer for chatbot queries"""
+    query = serializers.CharField(max_length=500)
+    organization_id = serializers.UUIDField(required=False, allow_null=True)
+
+
+class GlobalChatbotSuggestionSerializer(serializers.Serializer):
+    """Serializer for getting query suggestions"""
+    partial_query = serializers.CharField(max_length=200)
+
+
+class GlobalChatbotResponseSerializer(serializers.Serializer):
+    """Serializer for chatbot response"""
+    answer = serializers.CharField()
+    insights = serializers.ListField(child=serializers.CharField())
+    summary_stats = serializers.JSONField()
+    visualization = serializers.JSONField(allow_null=True)
+    recommendations = serializers.ListField(child=serializers.CharField())
+    raw_data = serializers.JSONField()
+    query_metadata = serializers.JSONField()
+    
+    
+class ChatHistorySerializer(serializers.Serializer):
+    """Serializer for chat history"""
+    id = serializers.UUIDField()
+    query = serializers.CharField()
+    response = serializers.JSONField()
+    organization_id = serializers.UUIDField(allow_null=True)
+    created_at = serializers.DateTimeField()

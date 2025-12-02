@@ -16,7 +16,8 @@ from .views import (
     BulkRiskCalculationViewSet,
     RiskContextViewSet,
     RiskOverrideViewSet,
-    RiskContextChatViewSet
+    RiskContextChatViewSet,
+    GlobalChatbotViewSet
 )
 
 router = DefaultRouter()
@@ -36,6 +37,7 @@ router.register(r'bulk-risk', BulkRiskCalculationViewSet, basename='bulk-risk')
 router.register(r'risk-contexts', RiskContextViewSet, basename='risk-context')
 router.register(r'risk-overrides', RiskOverrideViewSet, basename='risk-override')
 router.register(r'risk-context-chats', RiskContextChatViewSet, basename='risk-context-chat')
+router.register(r'chatbot', GlobalChatbotViewSet, basename='chatbot')
 
 urlpatterns = [
     path('', include(router.urls)),

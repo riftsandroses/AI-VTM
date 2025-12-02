@@ -640,3 +640,50 @@ class RiskContextChatMessage(models.Model):
     
     def __str__(self):
         return f"{self.role}: {self.content[:50]}..."
+    
+
+class GlobalChatHistory(models.Model):
+    """Store global chatbot conversation history"""
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    organization = models.ForeignKey(
+        Organization, 
+        on_delete=models.SET_NULL, 
+        null=True, 
+        blank=True,
+        related_name='chat_history'
+    )
+    
+    # Query details
+    query = models.TextField(help_text="User's natural language query")
+    intent = models.CharField(max_length=200, blank=True)
+    query_type = models.CharField(max_length=50, blank=True)
+    
+    # Response details
+    answer = models.TextField()
+    insights = models.JSONField(default=list)
+    summary_stats = models.JSONField(default=dict)
+    visualization_config = models.JSONField(null=True, blank=True)
+    raw_data = models.JSONField(default=dict)
+    
+    # Metadata
+    user_identifier = models.CharField(max_length=255, blank=True)
+    session_id = models.UUIDField(default=uuid.uuid4)
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    # Feedback
+    was_helpful = models.BooleanField(null=True, blank=True)
+    feedback_comments = models.TextField(blank=True)
+    
+    class Meta:
+        ordering = ['-created_at']
+        verbose_name = "Global Chat History"
+        verbose_name_plural = "Global Chat History"
+        indexes = [
+            models.Index(fields=['-created_at']),
+            models.Index(fields=['organization', '-created_at']),
+            models.Index(fields=['session_id']),
+        ]
+    
+    def __str__(self):
+        return f"Query: {self.query[:50]}... at {self.created_at}"

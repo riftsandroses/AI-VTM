@@ -41,7 +41,8 @@ from .models import (
     RiskContext,
     RiskOverrideHistory,
     RiskContextChat,
-    RiskContextChatMessage
+    RiskContextChatMessage,
+    GlobalChatHistory
 )
 
 # ---------------------------------
@@ -85,7 +86,11 @@ from .serializers import (
     RiskContextChatMessageSerializer,
     ApplyContextToSimilarSerializer,
     EnhancedVulnerabilityRiskAssessmentSerializer,
-    VulnerabilityWithAssetDetailsSerializer
+    VulnerabilityWithAssetDetailsSerializer,
+    GlobalChatbotQuerySerializer,
+    GlobalChatbotSuggestionSerializer,
+    GlobalChatbotResponseSerializer,
+    ChatHistorySerializer
 )
 
 # ---------------------------------
@@ -96,6 +101,7 @@ from .chat_service import RemediationChatService
 from .risk_scoring_service import RiskScoringService
 from .tasks import generate_remediation_task, process_feedback_task
 from .risk_context_service import RiskContextService
+from .global_chatbot_service import GlobalChatbotService, convert_uuids_to_strings
 
 
 class OrganizationViewSet(viewsets.ModelViewSet):
@@ -1247,42 +1253,40 @@ class RiskAssessmentHistoryViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(trending)
 
 
-# Add these actions to existing viewsets
 
-# Add to VulnerabilityViewSet
-@action(detail=True, methods=['get'])
-def with_risk(self, request, pk=None):
-    """
-    Get vulnerability with risk assessment
-    GET /api/vulnerabilities/{id}/with_risk/
-    """
-    vulnerability = self.get_object()
-    serializer = VulnerabilityWithRiskSerializer(vulnerability)
-    return Response(serializer.data)
+    @action(detail=True, methods=['get'])
+    def with_risk(self, request, pk=None):
+        """
+        Get vulnerability with risk assessment
+        GET /api/vulnerabilities/{id}/with_risk/
+        """
+        vulnerability = self.get_object()
+        serializer = VulnerabilityWithRiskSerializer(vulnerability)
+        return Response(serializer.data)
 
 
-# Add to AssetViewSet
-@action(detail=True, methods=['get'])
-def with_risk(self, request, pk=None):
-    """
-    Get asset with risk assessment
-    GET /api/assets/{id}/with_risk/
-    """
-    asset = self.get_object()
-    serializer = AssetWithRiskSerializer(asset)
-    return Response(serializer.data)
+    # Add to AssetViewSet
+    @action(detail=True, methods=['get'])
+    def with_risk(self, request, pk=None):
+        """
+        Get asset with risk assessment
+        GET /api/assets/{id}/with_risk/
+        """
+        asset = self.get_object()
+        serializer = AssetWithRiskSerializer(asset)
+        return Response(serializer.data)
 
 
-# Add to OrganizationViewSet
-@action(detail=True, methods=['get'])
-def with_risk(self, request, pk=None):
-    """
-    Get organization with risk assessment
-    GET /api/organizations/{id}/with_risk/
-    """
-    organization = self.get_object()
-    serializer = OrganizationWithRiskSerializer(organization)
-    return Response(serializer.data)
+    # Add to OrganizationViewSet
+    @action(detail=True, methods=['get'])
+    def with_risk(self, request, pk=None):
+        """
+        Get organization with risk assessment
+        GET /api/organizations/{id}/with_risk/
+        """
+        organization = self.get_object()
+        serializer = OrganizationWithRiskSerializer(organization)
+        return Response(serializer.data)
 
 
 # Bulk operations viewset
@@ -1433,6 +1437,17 @@ class RiskContextViewSet(viewsets.ModelViewSet):
     """
     queryset = RiskContext.objects.all()
     serializer_class = RiskContextSerializer
+    filter_backends = [DjangoFilterBackend, OrderingFilter]
+    filterset_fields = ['context_type', 'object_id', 'is_active', 'added_by']
+    ordering_fields = ['added_at', 'resulting_risk_score']
+    ordering = ['-added_at']
+
+    def get_serializer_class(self):
+        """Use detailed serializer for retrieve action"""
+        if self.action == 'retrieve':
+            from .serializers import RiskContextDetailSerializer
+            return RiskContextDetailSerializer
+        return RiskContextSerializer
 
     @action(detail=False, methods=['post'])
     def add_context(self, request):
@@ -1557,7 +1572,7 @@ class RiskContextViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(contexts, many=True)
         return Response(serializer.data)
-
+    
 
 class RiskOverrideViewSet(viewsets.ModelViewSet):
     """
@@ -2043,3 +2058,270 @@ class RiskContextChatViewSet(viewsets.ModelViewSet):
         active_chats = self.queryset.filter(is_active=True)
         serializer = self.get_serializer(active_chats, many=True)
         return Response(serializer.data)
+
+
+class GlobalChatbotViewSet(viewsets.ViewSet):
+    """
+    Global AI Chatbot for analytics and insights
+    Provides natural language querying with auto-suggestions
+    """
+    
+    @action(detail=False, methods=['post'])
+    def ask(self, request):
+        """
+        Ask a question to the global chatbot
+        
+        POST /api/chatbot/ask/
+        {
+            "query": "How many assets have high vulnerabilities?",
+            "organization_id": "uuid"  // optional
+        }
+        
+        Returns:
+        {
+            "answer": "Natural language answer",
+            "insights": ["insight 1", "insight 2"],
+            "summary_stats": {"stat": value},
+            "visualization": {
+                "needed": true,
+                "type": "bar",
+                "title": "Chart Title",
+                "data": {
+                    "labels": ["Label 1", "Label 2"],
+                    "datasets": [{
+                        "label": "Dataset",
+                        "data": [10, 20],
+                        "backgroundColor": ["#FF6384", "#36A2EB"]
+                    }]
+                }
+            },
+            "recommendations": ["recommendation 1"],
+            "raw_data": {...}
+        }
+        """
+        serializer = GlobalChatbotQuerySerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        query = serializer.validated_data['query']
+        organization_id = serializer.validated_data.get('organization_id')
+        
+        try:
+            chatbot_service = GlobalChatbotService()
+            result = chatbot_service.process_query(query, organization_id)
+            
+            # Ensure all data is JSON serializable
+            result = convert_uuids_to_strings(result)
+            
+            # Save to chat history
+            chat_history = GlobalChatHistory.objects.create(
+                organization_id=organization_id,
+                query=query,
+                intent=result.get('query_metadata', {}).get('intent', ''),
+                query_type=result.get('query_metadata', {}).get('query_type', ''),
+                answer=result.get('answer', ''),
+                insights=result.get('insights', []),
+                summary_stats=result.get('summary_stats', {}),
+                visualization_config=result.get('visualization'),
+                raw_data=result.get('raw_data', {}),
+                user_identifier=request.user.username if hasattr(request, 'user') and request.user.is_authenticated else 'anonymous'
+            )
+            
+            response_data = {
+                **result,
+                'chat_history_id': str(chat_history.id),
+                'timestamp': chat_history.created_at.isoformat()
+            }
+            
+            return Response(response_data, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['post'])
+    def suggestions(self, request):
+        """
+        Get query suggestions as user types
+        
+        POST /api/chatbot/suggestions/
+        {
+            "partial_query": "How many"
+        }
+        
+        Returns:
+        {
+            "suggestions": [
+                "How many assets have high vulnerabilities?",
+                "How many critical vulnerabilities exist?",
+                "How many assets are in the system?",
+                "How many vulnerabilities were found this month?",
+                "How many remediations have been generated?"
+            ]
+        }
+        """
+        serializer = GlobalChatbotSuggestionSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        partial_query = serializer.validated_data['partial_query']
+        
+        if len(partial_query) < 3:
+            return Response({
+                'suggestions': []
+            }, status=status.HTTP_200_OK)
+        
+        try:
+            chatbot_service = GlobalChatbotService()
+            suggestions = chatbot_service.get_question_suggestions(partial_query)
+            
+            return Response({
+                'suggestions': suggestions
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+    
+    @action(detail=False, methods=['get'])
+    def history(self, request):
+        """
+        Get chat history
+        
+        GET /api/chatbot/history/?organization_id=uuid&limit=20
+        """
+        organization_id = request.query_params.get('organization_id')
+        limit = int(request.query_params.get('limit', 20))
+        
+        history_qs = GlobalChatHistory.objects.all()
+        
+        if organization_id:
+            history_qs = history_qs.filter(organization_id=organization_id)
+        
+        history_qs = history_qs[:limit]
+        
+        history_data = [
+            {
+                'id': str(h.id),
+                'query': h.query,
+                'answer': h.answer,
+                'insights': h.insights,
+                'summary_stats': h.summary_stats,
+                'visualization': h.visualization_config,
+                'created_at': h.created_at.isoformat(),
+                'was_helpful': h.was_helpful
+            }
+            for h in history_qs
+        ]
+        
+        return Response({
+            'history': history_data,
+            'count': len(history_data)
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=True, methods=['post'])
+    def feedback(self, request, pk=None):
+        """
+        Submit feedback on a chat response
+        
+        POST /api/chatbot/{id}/feedback/
+        {
+            "was_helpful": true,
+            "comments": "Great answer!"
+        }
+        """
+        chat_history = get_object_or_404(GlobalChatHistory, id=pk)
+        
+        was_helpful = request.data.get('was_helpful')
+        comments = request.data.get('comments', '')
+        
+        chat_history.was_helpful = was_helpful
+        chat_history.feedback_comments = comments
+        chat_history.save()
+        
+        return Response({
+            'message': 'Feedback received',
+            'chat_history_id': str(chat_history.id)
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['get'])
+    def statistics(self, request):
+        """
+        Get chatbot usage statistics
+        
+        GET /api/chatbot/statistics/
+        """
+        total_queries = GlobalChatHistory.objects.count()
+        helpful_queries = GlobalChatHistory.objects.filter(was_helpful=True).count()
+        
+        # Top query types
+        from django.db.models import Count
+        top_intents = GlobalChatHistory.objects.values('intent').annotate(
+            count=Count('id')
+        ).order_by('-count')[:10]
+        
+        # Recent queries
+        recent = GlobalChatHistory.objects.all()[:10]
+        
+        return Response({
+            'total_queries': total_queries,
+            'helpful_queries': helpful_queries,
+            'helpful_percentage': (helpful_queries / total_queries * 100) if total_queries > 0 else 0,
+            'top_intents': list(top_intents),
+            'recent_queries': [
+                {
+                    'query': q.query,
+                    'created_at': q.created_at.isoformat()
+                }
+                for q in recent
+            ]
+        }, status=status.HTTP_200_OK)
+    
+    @action(detail=False, methods=['get'])
+    def example_questions(self, request):
+        """
+        Get example questions users can ask
+        
+        GET /api/chatbot/example_questions/
+        """
+        examples = {
+            'count_queries': [
+                "How many assets have high vulnerabilities?",
+                "How many critical vulnerabilities exist?",
+                "How many vulnerabilities are unresolved?",
+                "How many assets are in each organization?"
+            ],
+            'comparison_queries': [
+                "Compare vulnerability severity across all assets",
+                "Compare risk scores between applications and servers",
+                "Which organization has the most vulnerabilities?"
+            ],
+            'trend_queries': [
+                "Show me the trend of vulnerabilities over the past 6 months",
+                "How have critical vulnerabilities changed over time?",
+                "What's the monthly trend of new vulnerabilities?"
+            ],
+            'ranking_queries': [
+                "What are the top 5 most vulnerable assets?",
+                "Which assets have the highest risk scores?",
+                "Show me the most common vulnerability categories",
+                "What are the top OWASP vulnerabilities?"
+            ],
+            'detail_queries': [
+                "Tell me about vulnerabilities in [asset name]",
+                "What are the critical issues in [asset name]?",
+                "Show me all SQL Injection vulnerabilities",
+                "What remediations exist for [asset name]?"
+            ],
+            'time_based_queries': [
+                "How many critical issues were highlighted in [asset] in past 3 years?",
+                "Show vulnerabilities discovered in the last month",
+                "What vulnerabilities were found this year?"
+            ]
+        }
+        
+        return Response(examples, status=status.HTTP_200_OK)
